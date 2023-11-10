@@ -17,7 +17,7 @@ from bentoml.exceptions import ServiceUnavailable
 from ..configuration.containers import BentoMLContainer
 from ..context import component_context
 from ..context import trace_context
-from ..marshal.dispatcher import CorkDispatcher
+from ..marshal.dispatcher import Dispatcher
 from ..runner.container import AutoContainer
 from ..runner.container import Payload
 from ..runner.utils import PAYLOAD_META_HEADER
@@ -54,7 +54,7 @@ class RunnerAppFactory(BaseAppFactory):
         self.worker_index = worker_index
         self.enable_metrics = enable_metrics
 
-        self.dispatchers: dict[str, CorkDispatcher] = {}
+        self.dispatchers: dict[str, Dispatcher] = {}
 
         runners_config = BentoMLContainer.runners_config.get()
         traffic = runners_config.get("traffic", {}).copy()
@@ -69,9 +69,11 @@ class RunnerAppFactory(BaseAppFactory):
 
         for method in runner.runner_methods:
             max_batch_size = method.max_batch_size if method.config.batchable else -1
-            self.dispatchers[method.name] = CorkDispatcher(
+            self.dispatchers[method.name] = Dispatcher(
                 max_latency_in_ms=method.max_latency_ms,
                 max_batch_size=max_batch_size,
+                optimizer=method.optimizer,
+                strategy=method.batching_strategy,
                 fallback=fallback,
             )
 

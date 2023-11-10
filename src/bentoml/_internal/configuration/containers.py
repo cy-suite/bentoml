@@ -144,11 +144,13 @@ class BentoMLConfiguration:
 
     def _finalize(self):
         RUNNER_CFG_KEYS = [
+            "optimizer",
             "batching",
             "resources",
             "logging",
             "metrics",
             "traffic",
+            "strategy",
             "workers_per_resource",
         ]
         global_runner_cfg = {k: self.config["runners"][k] for k in RUNNER_CFG_KEYS}

@@ -322,15 +322,17 @@ Runner Definition
 
             # below are also configurable via config file:
 
-            # default configs:
-            max_batch_size=..  # default max batch size will be applied to all run methods, unless override in the runnable_method_configs
-            max_latency_ms=.. # default max latency will be applied to all run methods, unless override in the runnable_method_configs
+            # default configs, which will be applied to all run methods, unless overriden for a specific method:
+            max_batch_size=..,
+            max_latency_ms=..,
+            batching_strategy=..,
 
             runnable_method_configs=[
                 {
                     method_name="predict",
                     max_batch_size=..,
                     max_latency_ms=..,
+                    batching_strategy=..,
                 }
             ],
         )
@@ -363,6 +365,10 @@ To explicitly disable or control adaptive batching behaviors at runtime, configu
               enabled: true
               max_batch_size: 100
               max_latency_ms: 500
+              strategy:
+                name: intelligent_wait
+                options:
+                  decay: 0.95
 
     .. tab-item:: Individual Runner
         :sync: individual_runner
@@ -376,6 +382,10 @@ To explicitly disable or control adaptive batching behaviors at runtime, configu
                  enabled: true
                  max_batch_size: 100
                  max_latency_ms: 500
+                 strategy:
+                   name: intelligent_wait
+                   options:
+                     decay: 0.95
 
 Resource Allocation
 ^^^^^^^^^^^^^^^^^^^

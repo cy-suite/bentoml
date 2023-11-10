@@ -4,13 +4,17 @@ import logging
 import typing as t
 from abc import ABC
 from abc import abstractmethod
+from pprint import pprint
 
 import attr
 from simple_di import Provide
 from simple_di import inject
 
+from ...exceptions import BentoMLConfigException
 from ...exceptions import StateException
 from ..configuration.containers import BentoMLContainer
+from ..marshal.dispatcher import BATCHING_STRATEGY_REGISTRY
+from ..marshal.dispatcher import OPTIMIZER_REGISTRY
 from ..models.model import Model
 from ..tag import validate_tag_str
 from ..utils import first_not_none
@@ -22,6 +26,8 @@ from .strategy import Strategy
 
 if t.TYPE_CHECKING:
     from ...triton import Runner as TritonRunner
+    from ..marshal.dispatcher import BatchingStrategy
+    from ..marshal.dispatcher import Optimizer
     from .runnable import RunnableMethodConfig
 
     # only use ParamSpec in type checking, as it's only in 3.10
@@ -47,6 +53,8 @@ class RunnerMethod(t.Generic[T, P, R]):
     config: RunnableMethodConfig
     max_batch_size: int
     max_latency_ms: int
+    optimizer: Optimizer
+    batching_strategy: BatchingStrategy
 
     def run(self, *args: P.args, **kwargs: P.kwargs) -> R:
         return self.runner._runner_handle.run_method(self, *args, **kwargs)
@@ -135,7 +143,7 @@ class Runner(AbstractRunner):
 
     runner_methods: list[RunnerMethod[t.Any, t.Any, t.Any]]
     scheduling_strategy: type[Strategy]
-    workers_per_resource: int | float = 1
+    workers_per_resource: float = 1
     runnable_init_params: dict[str, t.Any] = attr.field(
         default=None, converter=attr.converters.default_if_none(factory=dict)
     )
@@ -170,6 +178,8 @@ class Runner(AbstractRunner):
         models: list[Model] | None = None,
         max_batch_size: int | None = None,
         max_latency_ms: int | None = None,
+        optimizer: Optimizer | None = None,
+        batching_strategy: BatchingStrategy | None = None,
         method_configs: dict[str, dict[str, int]] | None = None,
         embedded: bool = False,
     ) -> None:
@@ -189,8 +199,11 @@ class Runner(AbstractRunner):
             models: An optional list composed of ``bentoml.Model`` instances.
             max_batch_size: Max batch size config for dynamic batching. If not provided, use the default value from
                             configuration.
-            max_latency_ms: Max latency config for dynamic batching. If not provided, use the default value from
-                            configuration.
+            max_latency_ms: Max latency config. If not provided, uses the default value from configuration.
+            optimizer: Optimizer to use to predict runtime for runners. If not provided, uses the default value
+                       from the configuration
+            batching_strategy: Batching strategy for dynamic batching. If not provided, uses the default value
+                               from the configuration.
             method_configs: A dictionary per method config for this given Runner signatures.
 
         Returns:
@@ -227,6 +240,8 @@ class Runner(AbstractRunner):
 
             method_max_batch_size = None
             method_max_latency_ms = None
+            method_optimizer = None
+            method_batching_strategy = None
             if method_name in method_configs:
                 method_max_batch_size = method_configs[method_name].get(
                     "max_batch_size"
@@ -234,6 +249,56 @@ class Runner(AbstractRunner):
                 method_max_latency_ms = method_configs[method_name].get(
                     "max_latency_ms"
                 )
+                method_optimizer = method_configs[method_name].get("optimizer")
+                method_batching_strategy = method_configs[method_name].get(
+                    "batching_strategy"
+                )
+
+            optimizer_conf = config["optimizer"]
+            if isinstance(optimizer_conf, str):
+                optimizer_name = optimizer_conf
+                optimizer_opts = {}
+            else:
+                optimizer_name = optimizer_conf["name"]
+                optimizer_opts = optimizer_conf["options"]
+
+            if optimizer_name not in OPTIMIZER_REGISTRY:
+                raise BentoMLConfigException(
+                    f"Unknown optimizer '{optimizer_name}'. Available optimizers are: {','.join(OPTIMIZER_REGISTRY.keys())}."
+                )
+
+            try:
+                default_optimizer = OPTIMIZER_REGISTRY[optimizer_name](optimizer_opts)
+            except Exception as e:
+                raise BentoMLConfigException(
+                    f"Initializing strategy '{optimizer_name}' with configured options ({pprint(optimizer_opts)}) failed."
+                ) from e
+
+            strategy_conf = config["batching"]["strategy"]
+            if isinstance(strategy_conf, str):
+                pass
+            else:
+                strategy_conf["name"]
+                strategy_conf["options"]
+
+            if config["batching"]["strategy"] not in BATCHING_STRATEGY_REGISTRY:
+                raise BentoMLConfigException(
+                    f"Unknown batching strategy '{config['batching']['strategy']}'. Available strategies are: {','.join(BATCHING_STRATEGY_REGISTRY.keys())}.",
+                )
+
+            try:
+                if isinstance(strategy_conf, str):
+                    default_batching_strategy = BATCHING_STRATEGY_REGISTRY[
+                        strategy_conf
+                    ]({})
+                else:
+                    default_batching_strategy = BATCHING_STRATEGY_REGISTRY[
+                        strategy_conf["name"]
+                    ](strategy_conf["options"])
+            except Exception as e:
+                raise BentoMLConfigException(
+                    f"Initializing strategy '{pprint(config['batching'])}' failed."
+                ) from e
 
             runner_method_map[method_name] = RunnerMethod(
                 runner=self,
@@ -248,6 +313,16 @@ class Runner(AbstractRunner):
                     method_max_latency_ms,
                     max_latency_ms,
                     default=config["batching"]["max_latency_ms"],
+                ),
+                optimizer=first_not_none(
+                    method_optimizer,
+                    optimizer,
+                    default=default_optimizer,
+                ),
+                batching_strategy=first_not_none(
+                    method_batching_strategy,
+                    batching_strategy,
+                    default=default_batching_strategy,
                 ),
             )
 
