@@ -4,7 +4,6 @@ import collections
 import datetime
 import logging
 import logging.config
-import os
 import random
 import typing as t
 
@@ -13,12 +12,6 @@ from opentelemetry._logs import set_logger_provider
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk._logs import LoggingHandler
 from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
-from opentelemetry.sdk.environment_variables import OTEL_EXPORTER_OTLP_CERTIFICATE
-from opentelemetry.sdk.environment_variables import OTEL_EXPORTER_OTLP_COMPRESSION
-from opentelemetry.sdk.environment_variables import OTEL_EXPORTER_OTLP_ENDPOINT
-from opentelemetry.sdk.environment_variables import OTEL_EXPORTER_OTLP_HEADERS
-from opentelemetry.sdk.environment_variables import OTEL_EXPORTER_OTLP_INSECURE
-from opentelemetry.sdk.environment_variables import OTEL_EXPORTER_OTLP_TIMEOUT
 from opentelemetry.sdk.resources import Resource
 
 from ...exceptions import MissingDependencyException
@@ -27,7 +20,12 @@ from ..context import trace_context
 from .base import MonitorBase
 
 try:
-    from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
+    from opentelemetry.exporter.otlp.proto.grpc._log_exporter import (
+        OTLPLogExporter as OTLPGrpcLogExporter,
+    )
+    from opentelemetry.exporter.otlp.proto.http._log_exporter import (
+        OTLPLogExporter as OTLPHttpLogExporter,
+    )
 except ImportError:
     raise MissingDependencyException(
         "'opentelemetry-exporter-otlp' is required to use OTLP exporter. Make sure to install it with 'pip install \"bentoml[monitor-otlp]\""
@@ -106,6 +104,7 @@ class OTLPMonitor(MonitorBase["JSONSerializable"]):
         timeout: int | str | None = None,
         compression: str | None = None,
         meta_sample_rate: float = 1.0,
+        protocol: t.Literal["http", "grpc"] = "http",
         **_: t.Any,
     ) -> None:
         """
@@ -119,6 +118,7 @@ class OTLPMonitor(MonitorBase["JSONSerializable"]):
             headers: The headers to use.
             timeout: The timeout to use.
             compression: The compression to use.
+            protocol: The protocol to use.
         """
         super().__init__(name, **_)
 
@@ -134,6 +134,8 @@ class OTLPMonitor(MonitorBase["JSONSerializable"]):
         self.data_logger: logging.Logger | None = None
         self._schema: dict[str, dict[str, str]] = {}
         self._will_export_schema = False
+
+        self.protocol = protocol
 
     def _init_logger(self) -> None:
         from opentelemetry.sdk.resources import SERVICE_INSTANCE_ID
@@ -156,20 +158,26 @@ class OTLPMonitor(MonitorBase["JSONSerializable"]):
         )
         set_logger_provider(self.logger_provider)
 
-        if self.endpoint is not None:
-            os.environ[OTEL_EXPORTER_OTLP_ENDPOINT] = self.endpoint
-        if self.insecure is not None:
-            os.environ[OTEL_EXPORTER_OTLP_INSECURE] = str(self.insecure)
-        if self.credentials is not None:
-            os.environ[OTEL_EXPORTER_OTLP_CERTIFICATE] = self.credentials
-        if self.headers is not None:
-            os.environ[OTEL_EXPORTER_OTLP_HEADERS] = self.headers
-        if self.timeout is not None:
-            os.environ[OTEL_EXPORTER_OTLP_TIMEOUT] = str(self.timeout)
-        if self.compression is not None:
-            os.environ[OTEL_EXPORTER_OTLP_COMPRESSION] = self.compression
+        exporter: OTLPHttpLogExporter | OTLPGrpcLogExporter
+        if self.protocol == "http":
+            exporter = OTLPHttpLogExporter(
+                endpoint=self.endpoint,
+                headers=self.headers,
+                timeout=self.timeout,
+                compression=self.compression,
+            )
+        elif self.protocol == "grpc":
+            exporter = OTLPGrpcLogExporter(
+                endpoint=self.endpoint,
+                insecure=self.insecure,
+                credentials=self.credentials,
+                headers=self.headers,
+                timeout=self.timeout,
+                compression=self.compression,
+            )
+        else:
+            raise ValueError(f"Invalid protocol: {self.protocol}")
 
-        exporter = OTLPLogExporter()
         self.logger_provider.add_log_record_processor(BatchLogRecordProcessor(exporter))
         handler = LoggingHandler(
             level=logging.NOTSET, logger_provider=self.logger_provider
